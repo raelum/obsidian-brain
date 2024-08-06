@@ -5,7 +5,7 @@
 
 import { Editor, EditorChange, EditorPosition, Plugin } from 'obsidian';
 
-export default class MyPlugin extends Plugin {
+export default class ObsidianBrain extends Plugin {
   async onload() {
     this.addCommand({
       id: 'complete-task',
