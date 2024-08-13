@@ -168,11 +168,11 @@ class Markdown {
     this.editor.transaction({ changes: this.changes });
   }
 
-  private lineStartPosition(lineNumber: number): EditorPosition {
+  lineStartPosition(lineNumber: number): EditorPosition {
     return { line: lineNumber, ch: 0 };
   }
 
-  private lineEndPosition(lineNumber: number): EditorPosition {
+  lineEndPosition(lineNumber: number): EditorPosition {
     return { line: lineNumber, ch: this.editor.getLine(lineNumber).length };
   }
 }
@@ -211,8 +211,7 @@ function isSameTask(task1: string, task2: string): boolean {
 
 function archiveTask(editor: Editor, completeTask: boolean): void {
   // Get current line information.
-  var currentPosition: EditorPosition = editor.getCursor();
-  var taskLineNumber: number = currentPosition.line;
+  var taskLineNumber: number = editor.getCursor().line;
   var md: Markdown = new Markdown(editor);
 
   // Don't do anything if current line isn't a task.
@@ -324,6 +323,8 @@ function archiveTask(editor: Editor, completeTask: boolean): void {
   // Apply all changes as 1 transaction so that command + z undos all of them together.
   md.applyChanges();
 
-  // Reset the cursor back to the original position.
-  editor.setCursor(currentPosition);
+  // Place cursor on the last character of the next task after completion.
+  if (completeTask) {
+    editor.setCursor(md.lineEndPosition(taskLineNumber));
+  }
 }
