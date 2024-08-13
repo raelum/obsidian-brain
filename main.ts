@@ -11,7 +11,7 @@ export default class ObsidianBrain extends Plugin {
       id: 'complete-task',
       name: 'Complete Task',
       editorCallback: (editor: Editor) => {
-        archiveTask(editor, true);
+        archiveTask(editor, ArchiveTaskMode.Complete);
       }
     });
 
@@ -19,7 +19,15 @@ export default class ObsidianBrain extends Plugin {
       id: 'progress-task',
       name: 'Progress Task',
       editorCallback: (editor: Editor) => {
-        archiveTask(editor, false);
+        archiveTask(editor, ArchiveTaskMode.Progress);
+      }
+    });
+
+    this.addCommand({
+      id: 'delete-task',
+      name: 'Delete Task',
+      editorCallback: (editor: Editor) => {
+        archiveTask(editor, ArchiveTaskMode.Delete);
       }
     });
   }
@@ -209,7 +217,13 @@ function isSameTask(task1: string, task2: string): boolean {
   return stripTask(task1) == stripTask(task2);
 }
 
-function archiveTask(editor: Editor, completeTask: boolean): void {
+enum ArchiveTaskMode {
+  Complete,
+  Progress,
+  Delete
+}
+
+function archiveTask(editor: Editor, mode: ArchiveTaskMode): void {
   // Get current line information.
   var taskLineNumber: number = editor.getCursor().line;
   var md: Markdown = new Markdown(editor);
@@ -224,99 +238,101 @@ function archiveTask(editor: Editor, completeTask: boolean): void {
     return;
   }
   var task: Task = taskResult as Task;
-  if (completeTask) {
+  if (mode == ArchiveTaskMode.Complete) {
     task.markAsCompleted();
-  } else {
+  } else if (mode == ArchiveTaskMode.Progress) {
     task.markAsInProgress();
   }
 
-  // Find history section.
-  var historyLineNumber: number = -1;
-  for (var i = taskLineNumber + 1; i < editor.lineCount(); i++) {
-    var line = editor.getLine(i);
-    if (line == "# History") {
-      historyLineNumber = i;
-      break;
-    }
-  }
-
-  // Create history section if it doesn't exist.
-  if (historyLineNumber == -1) {
-    md.appendToEnd("# History");
-    historyLineNumber = editor.lineCount();
-  }
-
-  // Find today section.
-  let today = getLocalDateString();
-  var todayLineNumber = -1;
-  for (var i = historyLineNumber + 1; i < editor.lineCount(); i++) {
-    var line = editor.getLine(i);
-    if (line == "## " + today) {
-      todayLineNumber = i;
-      break;
-    }
-  }
-
-  // Create today subsection if it doesn't exist.
-  var createdTodaySection = false;
-  if (todayLineNumber == -1) {
-    md.appendAfterLine(historyLineNumber, "## " + today);
-    // We appended the section but it doesn't truly exist until changes are applied. For all intents and purposes, the
-    // true line number for today section is same as history section since it's being inserted at that spot.
-    todayLineNumber = historyLineNumber;
-    createdTodaySection = true;
-  }
-
-  if (createdTodaySection) {
-    // Today section was just created, so we can insert the task without performing a search.
-    md.appendAfterLine(todayLineNumber, task.toString(0));
-  } else {
-    // Today section already exists, so search for 
-    var archiveTaskLineNumber = todayLineNumber + 1;
-    var currentParentLevel = 0;
-    for (; currentParentLevel < task.parents.length; currentParentLevel++) {
-      while (md.isArchiveTask(archiveTaskLineNumber) &&
-        // Either the current task is a subtask compared to the parent.
-        (md.indentLevel(archiveTaskLineNumber) > currentParentLevel ||
-          // Or the current task is a sibling of the parent, but not a match yet.
-          (md.indentLevel(archiveTaskLineNumber) == currentParentLevel &&
-            !isSameTask(editor.getLine(archiveTaskLineNumber), task.parents[currentParentLevel])))) {
-        archiveTaskLineNumber++;
-      }
-      if (!md.isArchiveTask(archiveTaskLineNumber) || md.indentLevel(archiveTaskLineNumber) < currentParentLevel) {
-        // We reached the end of the task (or subtask) list.
+  if (mode != ArchiveTaskMode.Delete) {
+    // Find history section.
+    var historyLineNumber: number = -1;
+    for (var i = taskLineNumber + 1; i < editor.lineCount(); i++) {
+      var line = editor.getLine(i);
+      if (line == "# History") {
+        historyLineNumber = i;
         break;
-      } else if (md.indentLevel(archiveTaskLineNumber) == currentParentLevel &&
-        isSameTask(editor.getLine(archiveTaskLineNumber), task.parents[currentParentLevel])) {
-        // We reached the matching parent task.
-        archiveTaskLineNumber++;
-
       }
     }
 
-    // Iterate to the end of the current list (or sublist).
-    while (md.isArchiveTask(archiveTaskLineNumber) && md.indentLevel(archiveTaskLineNumber) >= currentParentLevel) {
-      // Exit early if we manage to find the current task.
+    // Create history section if it doesn't exist.
+    if (historyLineNumber == -1) {
+      md.appendToEnd("# History");
+      historyLineNumber = editor.lineCount();
+    }
+
+    // Find today section.
+    let today = getLocalDateString();
+    var todayLineNumber = -1;
+    for (var i = historyLineNumber + 1; i < editor.lineCount(); i++) {
+      var line = editor.getLine(i);
+      if (line == "## " + today) {
+        todayLineNumber = i;
+        break;
+      }
+    }
+
+    // Create today subsection if it doesn't exist.
+    var createdTodaySection = false;
+    if (todayLineNumber == -1) {
+      md.appendAfterLine(historyLineNumber, "## " + today);
+      // We appended the section but it doesn't truly exist until changes are applied. For all intents and purposes, the
+      // true line number for today section is same as history section since it's being inserted at that spot.
+      todayLineNumber = historyLineNumber;
+      createdTodaySection = true;
+    }
+
+    if (createdTodaySection) {
+      // Today section was just created, so we can insert the task without performing a search.
+      md.appendAfterLine(todayLineNumber, task.toString(0));
+    } else {
+      // Today section already exists, so search for 
+      var archiveTaskLineNumber = todayLineNumber + 1;
+      var currentParentLevel = 0;
+      for (; currentParentLevel < task.parents.length; currentParentLevel++) {
+        while (md.isArchiveTask(archiveTaskLineNumber) &&
+          // Either the current task is a subtask compared to the parent.
+          (md.indentLevel(archiveTaskLineNumber) > currentParentLevel ||
+            // Or the current task is a sibling of the parent, but not a match yet.
+            (md.indentLevel(archiveTaskLineNumber) == currentParentLevel &&
+              !isSameTask(editor.getLine(archiveTaskLineNumber), task.parents[currentParentLevel])))) {
+          archiveTaskLineNumber++;
+        }
+        if (!md.isArchiveTask(archiveTaskLineNumber) || md.indentLevel(archiveTaskLineNumber) < currentParentLevel) {
+          // We reached the end of the task (or subtask) list.
+          break;
+        } else if (md.indentLevel(archiveTaskLineNumber) == currentParentLevel &&
+          isSameTask(editor.getLine(archiveTaskLineNumber), task.parents[currentParentLevel])) {
+          // We reached the matching parent task.
+          archiveTaskLineNumber++;
+
+        }
+      }
+
+      // Iterate to the end of the current list (or sublist).
+      while (md.isArchiveTask(archiveTaskLineNumber) && md.indentLevel(archiveTaskLineNumber) >= currentParentLevel) {
+        // Exit early if we manage to find the current task.
+        if (md.indentLevel(archiveTaskLineNumber) == currentParentLevel &&
+          isSameTask(editor.getLine(archiveTaskLineNumber), task.task)) {
+          break;
+        }
+        archiveTaskLineNumber++;
+      }
+
       if (md.indentLevel(archiveTaskLineNumber) == currentParentLevel &&
         isSameTask(editor.getLine(archiveTaskLineNumber), task.task)) {
-        break;
+        // Replace existing bullet task to completed one.
+        md.replaceLine(archiveTaskLineNumber, task.task);
+      } else {
+        // Add task to list under section.
+        md.appendAfterLine(archiveTaskLineNumber - 1, task.toString(currentParentLevel));
       }
-      archiveTaskLineNumber++;
-    }
-
-    if (md.indentLevel(archiveTaskLineNumber) == currentParentLevel &&
-      isSameTask(editor.getLine(archiveTaskLineNumber), task.task)) {
-      // Replace existing bullet task to completed one.
-      md.replaceLine(archiveTaskLineNumber, task.task);
-    } else {
-      // Add task to list under section.
-      md.appendAfterLine(archiveTaskLineNumber - 1, task.toString(currentParentLevel));
     }
   }
 
-  // Delete task only if the user is marking the task as fully completed.
+  // Delete task only if the user is marking the task as fully completed or deleting it.
   // NOTE: We do this at the end since deleted lines impacts line numbers of other changes.
-  if (completeTask) {
+  if (mode == ArchiveTaskMode.Complete || mode == ArchiveTaskMode.Delete) {
     md.deleteLine(taskLineNumber);
   }
 
@@ -324,7 +340,7 @@ function archiveTask(editor: Editor, completeTask: boolean): void {
   md.applyChanges();
 
   // Place cursor on the last character of the next task after completion.
-  if (completeTask) {
+  if (mode == ArchiveTaskMode.Complete || mode == ArchiveTaskMode.Delete) {
     editor.setCursor(md.lineEndPosition(taskLineNumber));
   }
 }
