@@ -51,21 +51,22 @@ class Task {
 
   // Mark the task as completed.
   markAsCompleted(): void {
-    this.task = this.task.replace(this.bulletTaskRegex, "$1- [x]");
+    this.replaceTaskAndChildrenBullet("$1- [x]");
   }
 
   // Mark the task as in progress.
   markAsInProgress(): void {
-    this.task = this.task.replace(this.bulletTaskRegex, "$1- [/]");
+    this.replaceTaskAndChildrenBullet("$1- [/]");
   }
 
+  // Print out the current task including only parents after the give includeParentIndex.
   toString(includeParentIndex: number): string {
-    var includedParents = this.parents.slice(includeParentIndex);
-    if (includedParents.length > 0) {
-      return includedParents.join("\n") + "\n" + this.task;
-    } else {
-      return this.task;
-    }
+    return [...this.parents.slice(includeParentIndex), this.task, ...this.children].join("\n");
+  }
+
+  private replaceTaskAndChildrenBullet(replaceValue: string) {
+    this.task = this.task.replace(this.bulletTaskRegex, replaceValue);
+    this.children = this.children.map((c) => { return c.replace(this.bulletTaskRegex, replaceValue) });
   }
 }
 
@@ -134,7 +135,14 @@ class Markdown {
       }
     }
 
+    // Get the current task's children.
     var children: string[] = [];
+    var childLineNumber = lineNumber + 1;
+    var childIndentLevel = taskIndentLevel + 1;
+    while (childLineNumber <= this.editor.lastLine() && this.indentLevel(childLineNumber) >= childIndentLevel) {
+      children.push(this.editor.getLine(childLineNumber));
+      childLineNumber++;
+    }
 
     return new Task(parents, task, children);
   }
@@ -201,7 +209,7 @@ function stripTask(task: string): string {
   task = task.trim();
 
   // Define the preceding patterns to be removed.
-  const patterns = ["- [ ] ", "- [x] ", "- "];
+  const patterns = ["- [ ] ", "- [x] ", "- [/] ", "- "];
 
   // Remove any pattern found at the beginning of the string.
   for (const pattern of patterns) {
@@ -238,6 +246,7 @@ function archiveTask(editor: Editor, mode: ArchiveTaskMode): void {
     return;
   }
   var task: Task = taskResult as Task;
+  var numberOfChildren = task.children.length;
   if (mode == ArchiveTaskMode.Complete) {
     task.markAsCompleted();
   } else if (mode == ArchiveTaskMode.Progress) {
@@ -286,7 +295,9 @@ function archiveTask(editor: Editor, mode: ArchiveTaskMode): void {
       // Today section was just created, so we can insert the task without performing a search.
       md.appendAfterLine(todayLineNumber, task.toString(0));
     } else {
-      // Today section already exists, so search for 
+      // Today section already exists, so search for the point at which we can merge the current task into
+      // the history list. A task can have multiple parents that may or or may exist in the history list so
+      // we eagerly search for matching parents until we cannot find anymore.
       var archiveTaskLineNumber = todayLineNumber + 1;
       var currentParentLevel = 0;
       for (; currentParentLevel < task.parents.length; currentParentLevel++) {
@@ -309,7 +320,8 @@ function archiveTask(editor: Editor, mode: ArchiveTaskMode): void {
         }
       }
 
-      // Iterate to the end of the current list (or sublist).
+      // We've found the spot at which we can merge the remaining parents (if any) and current task.
+      // Iterate to the end of the current (sub)list to find the spot we can insert our current task.
       while (md.isArchiveTask(archiveTaskLineNumber) && md.indentLevel(archiveTaskLineNumber) >= currentParentLevel) {
         // Exit early if we manage to find the current task.
         if (md.indentLevel(archiveTaskLineNumber) == currentParentLevel &&
@@ -321,8 +333,19 @@ function archiveTask(editor: Editor, mode: ArchiveTaskMode): void {
 
       if (md.indentLevel(archiveTaskLineNumber) == currentParentLevel &&
         isSameTask(editor.getLine(archiveTaskLineNumber), task.task)) {
-        // Replace existing bullet task to completed one.
+        // We just found the target task in the history list. Replace it with the current intended bullet type.
         md.replaceLine(archiveTaskLineNumber, task.task);
+        // Add any children to the end of the list.
+        //
+        // TODO: Consider properly merging the existing archive task list and current task list. This is significant
+        // amount of work that I currently don't think is worth the hassle considering how rarely I encounter this case.
+        if (task.children.length > 0) {
+          archiveTaskLineNumber++;
+          while (md.isArchiveTask(archiveTaskLineNumber) && md.indentLevel(archiveTaskLineNumber) >= currentParentLevel + 1) {
+            archiveTaskLineNumber++;
+          }
+          md.appendAfterLine(archiveTaskLineNumber - 1, task.children.join("\n"));
+        }
       } else {
         // Add task to list under section.
         md.appendAfterLine(archiveTaskLineNumber - 1, task.toString(currentParentLevel));
@@ -333,7 +356,7 @@ function archiveTask(editor: Editor, mode: ArchiveTaskMode): void {
   // Delete task only if the user is marking the task as fully completed or deleting it.
   // NOTE: We do this at the end since deleted lines impacts line numbers of other changes.
   if (mode == ArchiveTaskMode.Complete || mode == ArchiveTaskMode.Delete) {
-    md.deleteLine(taskLineNumber);
+    md.deleteLine(taskLineNumber, taskLineNumber + numberOfChildren);
   }
 
   // Apply all changes as 1 transaction so that command + z undos all of them together.
