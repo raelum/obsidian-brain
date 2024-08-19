@@ -162,20 +162,8 @@ class Markdown {
 
   // Delete the given line range. If a range isn't given, it defaults to deleting one line.
   deleteLine(fromLine: number, toLine?: number) {
-    var startPosition: EditorPosition;
-    if (fromLine == 0) {
-      startPosition = this.lineStartPosition(0);
-    } else {
-      startPosition = this.lineEndPosition(fromLine - 1);
-    }
-
-    var endPosition: EditorPosition;
-    if (toLine == undefined) {
-      endPosition = this.lineEndPosition(fromLine);
-    } else {
-      endPosition = this.lineEndPosition(toLine);
-    }
-
+    var startPosition: EditorPosition = this.lineStartPosition(fromLine);
+    var endPosition: EditorPosition = this.lineStartPosition(toLine == undefined ? fromLine + 1 : toLine + 1);
     this.changes.push({ text: "", from: startPosition, to: endPosition });
   }
 
