@@ -3,7 +3,18 @@
 // - npm run dev
 // - Change code and it should rebuild, triggering hot reload on Obsidian
 
-import { Editor, EditorChange, EditorPosition, Plugin } from 'obsidian';
+import { Editor, EditorChange, EditorPosition, Plugin, Vault } from 'obsidian';
+import { RangeSetBuilder } from "@codemirror/state";
+import {
+  Decoration,
+  DecorationSet,
+  ViewUpdate,
+  PluginSpec,
+  PluginValue,
+  EditorView,
+  ViewPlugin,
+  WidgetType,
+} from "@codemirror/view";
 
 export default class ObsidianBrain extends Plugin {
   async onload() {
@@ -30,8 +41,162 @@ export default class ObsidianBrain extends Plugin {
         archiveTask(editor, ArchiveTaskMode.Delete);
       }
     });
+
+    // Register compact audio plugin for live edit view.
+    let compactAudioPlugin = ViewPlugin.define((view: EditorView) => {
+      return new CompactAudioPlugin(view, this.app.vault);
+    }, pluginSpec);
+    this.registerEditorExtension(compactAudioPlugin);
+
+    // Register compact audio processor for reading view.
+    this.registerMarkdownPostProcessor((element, context) => {
+      const fileLinks = element.findAll("a.internal-link");
+      for (let fileLink of fileLinks) {
+        // Check if it's an audio file link
+        let fileName = fileLink.getAttribute("href");
+        if (!fileName?.endsWith(".mp3")) {
+          continue;
+        }
+
+        // Check if it's there is compact audio syntax.
+        let sibling = fileLink.previousSibling;
+        if (sibling?.nodeType !== Node.TEXT_NODE || !sibling?.textContent?.endsWith("@")) {
+          continue;
+        }
+
+        // Get audio file resource path.
+        let audioResourcePathResult = getAudioResourcePath(this.app.vault, fileName);
+        if (audioResourcePathResult == null) {
+          continue;
+        }
+        let audioResourcePath: string = audioResourcePathResult as string;
+
+        // Remove @ symbol
+        sibling.textContent = sibling.textContent.slice(0, -1);
+
+        // Replace link with compact audio button. 
+        fileLink.replaceWith(createCompactAudioButton(audioResourcePath));
+      }
+    });
   }
 }
+
+// Get audio resource path by searching through all files in the vault for the given audio file.
+// TODO: Is there a better way to do this efficiently?
+function getAudioResourcePath(vault: Vault, audioFileName: string): string | null {
+  let files = vault.getFiles();
+  for (let file of files) {
+    if (file.name === audioFileName) {
+      return vault.getResourcePath(file);
+    }
+  }
+  return null;
+}
+
+function createCompactAudioButton(audioResourcePath: string): HTMLElement {
+  // Create audio element that remains hidden.
+  const audio = document.createElement("audio");
+  audio.toggleAttribute("controls");
+  audio.toggleAttribute("hidden");
+  audio.src = audioResourcePath;
+
+  // Create button that is used to play the audio from the hidden element.
+  const button = document.createElement("input");
+  button.type = "button";
+  button.value = "LISTEN";
+  button.onclick = () => {
+    audio.play();
+  }
+
+  // Create a span that contains both the hidden audio and button.
+  const span = document.createElement("span");
+  span.appendChild(audio);
+  span.appendChild(button);
+
+  return span;
+}
+
+export class CompactAudioWidget extends WidgetType {
+  audioResourcePath: string;
+
+  constructor(audioResourcePath: string) {
+    super();
+    this.audioResourcePath = audioResourcePath;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    return createCompactAudioButton(this.audioResourcePath);
+  }
+}
+
+class CompactAudioPlugin implements PluginValue {
+  decorations: DecorationSet;
+  vault: Vault;
+
+  constructor(view: EditorView, vault: Vault) {
+    this.vault = vault;
+    this.decorations = this.buildDecorations(view);
+  }
+
+  update(update: ViewUpdate) {
+    if (update.docChanged || update.viewportChanged || update.selectionSet) {
+      this.decorations = this.buildDecorations(update.view);
+    }
+  }
+
+  destroy() { }
+
+  buildDecorations(view: EditorView): DecorationSet {
+    let compactAudioRegex: RegExp = /@\[\[(.*\.mp3)\]\]/g;
+    const builder = new RangeSetBuilder<Decoration>();
+
+    // Iterate over every visible range in the editor.
+    for (let { from, to } of view.visibleRanges) {
+      // Get the string content of the visible range.
+      var slicedDoc = view.state.sliceDoc(from, to);
+
+      // Search the contents for each compact audio syntax one at a time.
+      let match: RegExpExecArray | null;
+      while ((match = compactAudioRegex.exec(slicedDoc)) !== null) {
+        let relativeStartIndex = match.index;
+        let matchLength = match[0].length;
+        let relativeEndIndex = relativeStartIndex + matchLength;
+        let audioFileName = match[1];
+
+        // Skip creating the compact audio widget when cursor is on the compact audio syntax.
+        // TODO: Update to support selection ranges with from AND to
+        // TODO: Update to support multiple selection ranges
+        let cursorPosition = view.state.selection.ranges[0].from;
+        let cursorInCompactAudio = cursorPosition >= from + relativeStartIndex && cursorPosition <= from + relativeEndIndex;
+        if (cursorInCompactAudio) {
+          continue;
+        }
+
+        // Search through files in the vault for the current audio file.
+        let audioResourcePathResult = getAudioResourcePath(this.vault, audioFileName);
+        if (audioResourcePathResult == null) {
+          continue;
+        }
+        let audioResourcePath: string = audioResourcePathResult as string;
+
+        // Create decoration to replace compact audio syntax with compact audio widget.
+        builder.add(
+          from + relativeStartIndex,
+          from + relativeEndIndex,
+          Decoration.replace({
+            widget: new CompactAudioWidget(audioResourcePath),
+          })
+        );
+      }
+    }
+
+    return builder.finish();
+  }
+}
+
+const pluginSpec: PluginSpec<CompactAudioPlugin> = {
+  decorations: (value: CompactAudioPlugin) => value.decorations,
+};
 
 class Task {
   parents: string[];
